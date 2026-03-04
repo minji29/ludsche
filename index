@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>테스트 페이지</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        input:focus {
+            outline: 2px solid #3b82f6;
+            background-color: #eff6ff;
+        }
+        .table-container {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        table {
+            min-width: 1000px;
+        }
+        .tab-active {
+            border-bottom: 2px solid #3b82f6;
+            color: #3b82f6;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen pb-20">
+
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <div class="max-w-5xl mx-auto px-4 py-4 flex justify-between items-center">
+            <h1 class="text-xl font-bold text-gray-800">테스트 페이지</h1>
+            <div class="flex items-center gap-3">
+                <span id="sync-status" class="text-xs text-gray-400">연결 확인 중...</span>
+                <button id="save-btn" onclick="saveCurrentTable()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition disabled:bg-gray-400">
+                    현재 표 저장
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-5xl mx-auto px-4 mt-6">
+        <!-- 주차 관리 탭 및 추가 버튼 -->
+        <div class="flex items-center justify-between mb-4 border-b overflow-x-auto">
+            <div id="tabs-container" class="flex gap-4"></div>
+            <button onclick="addNewWeek()" class="ml-4 p-2 text-blue-600 hover:bg-blue-50 rounded-full transition" title="주차 추가">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                </svg>
+            </button>
+        </div>
+
+        <!-- 메인 설정 버튼 -->
+        <div class="flex justify-end mb-2">
+            <button id="set-main-btn" onclick="setAsMain()" class="text-xs flex items-center gap-1 text-gray-500 hover:text-yellow-600 transition">
+                <svg xmlns="http://www.w3.org/2000/svg" id="main-star-icon" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.382-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                </svg>
+                <span id="main-btn-text">이 표를 메인으로 고정</span>
+            </button>
+        </div>
+
+        <!-- 표 섹션 -->
+        <section class="bg-white rounded-xl shadow-md overflow-hidden mb-8">
+            <div class="bg-gray-100 px-6 py-4 border-b">
+                <h2 id="current-week-title" class="text-lg font-semibold text-gray-700">로딩 중...</h2>
+            </div>
+            
+            <div class="table-container">
+                <table class="w-full border-collapse">
+                    <thead>
+                        <tr class="bg-gray-50">
+                            <script>
+                                for(let i=0; i<9; i++) {
+                                    document.write(`<th class="border-b border-r p-3 text-xs font-medium text-gray-500 uppercase tracking-wider">${i === 0 ? '구분' : i + '번'}</th>`);
+                                }
+                                document.write(`<th class="border-b p-3 text-xs font-medium text-gray-500 uppercase tracking-wider w-40">비고</th>`);
+                            </script>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none z-50">
+        데이터가 저장되었습니다!
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase 설정 (실행 환경에서 자동 주입)
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'multi-week-app';
+
+        let currentUser = null;
+        let weeks = ["3월 1주차"];
+        let activeWeek = "3월 1주차";
+        let mainWeek = "3월 1주차";
+
+        async function init() {
+            renderTableGrid();
+            await initAuth();
+        }
+
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Auth error:", error);
+            }
+        }
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUser = user;
+                document.getElementById('sync-status').innerText = "연결됨";
+                await loadSettings();
+                switchWeek(activeWeek);
+            }
+        });
+
+        function renderTableGrid() {
+            const tbody = document.getElementById('table-body');
+            tbody.innerHTML = '';
+            for (let r = 0; r < 9; r++) {
+                let tr = document.createElement('tr');
+                tr.className = "hover:bg-gray-50 transition";
+                for (let c = 0; c < 10; c++) {
+                    tr.innerHTML += `
+                        <td class="border-b border-r p-0 ${c === 9 ? 'bg-blue-50/30' : ''}">
+                            <input type="text" 
+                                class="cell-input w-full p-3 text-sm border-none bg-transparent" 
+                                placeholder="${c === 9 ? '비고 입력' : ''}"
+                                data-row="${r}" data-col="${c}">
+                        </td>`;
+                }
+                tbody.appendChild(tr);
+            }
+        }
+
+        async function loadSettings() {
+            if (!currentUser) return;
+            const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings_doc');
+            try {
+                const snap = await getDoc(settingsRef);
+                if (snap.exists()) {
+                    const data = snap.data();
+                    weeks = data.weeks || ["3월 1주차"];
+                    mainWeek = data.mainWeek || weeks[0];
+                    activeWeek = mainWeek;
+                }
+            } catch (e) {
+                console.error("Settings load error:", e);
+            }
+            renderTabs();
+        }
+
+        function renderTabs() {
+            const container = document.getElementById('tabs-container');
+            if (!container) return;
+            container.innerHTML = '';
+            weeks.forEach(week => {
+                const btn = document.createElement('button');
+                btn.className = `px-4 py-2 text-sm transition whitespace-nowrap ${activeWeek === week ? 'tab-active' : 'text-gray-500 hover:text-gray-700'}`;
+                btn.innerText = week;
+                btn.onclick = () => switchWeek(week);
+                container.appendChild(btn);
+            });
+            updateMainBtnUI();
+        }
+
+        window.switchWeek = async function(week) {
+            activeWeek = week;
+            document.getElementById('current-week-title').innerText = week;
+            renderTabs();
+            clearInputs();
+            await loadWeekData(week);
+        };
+
+        function clearInputs() {
+            document.querySelectorAll('.cell-input').forEach(input => input.value = '');
+        }
+
+        async function loadWeekData(week) {
+            if (!currentUser) return;
+            document.getElementById('sync-status').innerText = "불러오는 중...";
+            try {
+                const safeWeekId = `week_data_${week.replace(/\s+/g, '_')}`;
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', safeWeekId);
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    const data = snap.data().cells;
+                    document.querySelectorAll('.cell-input').forEach(input => {
+                        const key = `R${input.dataset.row}C${input.dataset.col}`;
+                        input.value = data[key] || '';
+                    });
+                    document.getElementById('sync-status').innerText = "동기화 완료";
+                } else {
+                    document.getElementById('sync-status').innerText = "새 데이터";
+                }
+            } catch (e) {
+                console.error("Data load error:", e);
+                document.getElementById('sync-status').innerText = "로드 실패";
+            }
+        }
+
+        window.saveCurrentTable = async function() {
+            if (!currentUser) return;
+            const btn = document.getElementById('save-btn');
+            btn.disabled = true;
+            document.getElementById('sync-status').innerText = "저장 중...";
+
+            const cellData = {};
+            document.querySelectorAll('.cell-input').forEach(input => {
+                const key = `R${input.dataset.row}C${input.dataset.col}`;
+                cellData[key] = input.value;
+            });
+
+            try {
+                const safeWeekId = `week_data_${activeWeek.replace(/\s+/g, '_')}`;
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', safeWeekId);
+                await setDoc(docRef, { 
+                    cells: cellData, 
+                    updatedAt: new Date().toISOString(),
+                    userId: currentUser.uid 
+                });
+                showToast(`${activeWeek} 저장 완료!`);
+                document.getElementById('sync-status').innerText = "저장됨";
+            } catch (e) {
+                console.error("Save error:", e);
+                showToast("저장 실패");
+            } finally {
+                btn.disabled = false;
+            }
+        };
+
+        window.addNewWeek = async function() {
+            const nextWeek = prompt("추가할 주차 이름을 입력하세요 (예: 3월 2주차)", `3월 ${weeks.length + 1}주차`);
+            if (!nextWeek || weeks.includes(nextWeek)) return;
+
+            weeks.push(nextWeek);
+            await saveSettings();
+            switchWeek(nextWeek);
+        };
+
+        window.setAsMain = async function() {
+            mainWeek = activeWeek;
+            await saveSettings();
+            updateMainBtnUI();
+            showToast(`${activeWeek}가 메인으로 고정되었습니다.`);
+        };
+
+        async function saveSettings() {
+            if (!currentUser) return;
+            const settingsRef = doc(db, 'artifacts', appId, 'public', 'data', 'settings_doc');
+            try {
+                await setDoc(settingsRef, { weeks, mainWeek });
+            } catch (e) {
+                console.error("Settings save error:", e);
+            }
+        }
+
+        function updateMainBtnUI() {
+            const icon = document.getElementById('main-star-icon');
+            const text = document.getElementById('main-btn-text');
+            if (!icon || !text) return;
+            if (activeWeek === mainWeek) {
+                icon.setAttribute('fill', 'currentColor');
+                icon.classList.add('text-yellow-500');
+                text.innerText = "메인으로 설정됨";
+            } else {
+                icon.setAttribute('fill', 'none');
+                icon.classList.remove('text-yellow-500');
+                text.innerText = "이 표를 메인으로 고정";
+            }
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.innerText = msg;
+            toast.style.opacity = '1';
+            setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+        }
+
+        init();
+    </script>
+</body>
+</html>
